@@ -71,8 +71,8 @@ func GetNTPTime(now time.Time) (uint32, uint32) {
 	return ntpSecs, ntpFrac
 }
 
-func (packet *NTPPacket) PatchPacket(message uint32) {
+func (packet *NTPPacket) PatchPacket(message uint16) {
 	message &= 0xFFFF
 	packet.TxTimeFrac &^= 0xFFFF  // Clear bottom two bytes
-	packet.TxTimeFrac |= message
+	packet.TxTimeFrac |= uint32(message)
 }
