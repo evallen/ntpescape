@@ -1,4 +1,4 @@
-package main
+package common
 
 import (
 	"time"
@@ -6,11 +6,11 @@ import (
 
 // NTP time starts at 00:00:00 1 Jan 1900 UTC, while
 // Unix time starts at 00:00:00 1 Jan 1970 UTC.
-// 
-// This calculates the number of seconds between those two timeslots.
+//
+// This calculates the number of seconds between those two times.
 // There were 70*365 (+17 leap) days in that period, each with
 // 24*60*60 seconds.
-const secsSinceNTPEpoch = (70*365 + 17) * (24*60*60)
+const secsSinceNTPEpoch = (70*365 + 17) * (24 * 60 * 60)
 
 // NTP Packet format found from RFC 5905
 // https://datatracker.ietf.org/doc/html/rfc5905#section-7
@@ -44,8 +44,8 @@ func GenerateClientPkt() *NTPPacket {
 	ntpSecs, ntpFrac := GetNTPTime(time.Now())
 
 	packet := &NTPPacket{
-		Flags: flags,
-		TxTimeSec: ntpSecs,
+		Flags:      flags,
+		TxTimeSec:  ntpSecs,
 		TxTimeFrac: ntpFrac,
 	}
 
@@ -57,17 +57,22 @@ func GenerateClientPkt() *NTPPacket {
 func GetNTPTime(now time.Time) (uint32, uint32) {
 	unixSecs := uint32(now.Unix())
 	nanoseconds := uint64(now.Nanosecond())
-	
 
 	ntpSecs := unixSecs + secsSinceNTPEpoch
 
 	// The NTP fraction is a uint32 representing the
 	// current fraction of a second where each increment
 	// in its value represents 1/2^32 seconds. So:
-	// 
+	//
 	// 		ntpFrac * (1/2^32) = nanoseconds / 1e9
 	// => 	ntpFrac = nanoseconds * 2^32 / 1e9
 	ntpFrac := uint32((nanoseconds << 32) / 1e9)
 
 	return ntpSecs, ntpFrac
+}
+
+func (packet *NTPPacket) PatchPacket(message uint32) {
+	message &= 0xFFFF
+	packet.TxTimeFrac &^= 0xFFFF  // Clear bottom two bytes
+	packet.TxTimeFrac |= message
 }

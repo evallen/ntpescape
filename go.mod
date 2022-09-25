@@ -1,3 +1,3 @@
-module github.com/evallen/ntpescape
+module ntpescape
 
-go 1.13
+go 1.19

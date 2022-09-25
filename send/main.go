@@ -5,6 +5,7 @@ import (
 	"flag"
 	"log"
 	"net"
+	"ntpescape/common"
 )
 
 // Goal: Send an NTP packet to myself with the TX timestamp
@@ -19,7 +20,8 @@ func main() {
 	}
 	defer conn.Close()
 
-	packet := GenerateClientPkt()
+	packet := common.GenerateClientPkt()
+	packet.PatchPacket(0x0102)
 	if err := binary.Write(conn, binary.BigEndian, packet); err != nil {
 		log.Fatalf("Failed sending packet %v to %v", packet, *host)
 	}
