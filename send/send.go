@@ -1,4 +1,4 @@
-package main
+package send
 
 import (
 	"bufio"
@@ -9,13 +9,13 @@ import (
 	"io"
 	"log"
 	"net"
-	"ntpescape/common"
+	"github.com/evallen/ntpescape/common"
 	"os"
 )
 
 // Goal: Send an NTP packet to myself with the TX timestamp
 // looking normal, but the final two bytes being 0a 0b
-func main() {
+func Main() {
 	host := flag.String("h", "localhost:123", "host: host to send the NTP packets to")
 	// infile := flag.String("f", "-", "file: file to exfiltrate data from ('-' for STDIN)")
 	flag.Parse()
