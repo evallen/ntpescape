@@ -1,6 +1,8 @@
 package common
 
 import (
+	"encoding/binary"
+	"fmt"
 	"time"
 )
 
@@ -71,8 +73,41 @@ func GetNTPTime(now time.Time) (uint32, uint32) {
 	return ntpSecs, ntpFrac
 }
 
-func (packet *NTPPacket) PatchPacket(message uint16) {
-	message &= 0xFFFF
+func (packet *NTPPacket) PatchPacketUnencrypted(message uint16) {
 	packet.TxTimeFrac &^= 0xFFFF  // Clear bottom two bytes
 	packet.TxTimeFrac |= uint32(message)
+}
+
+func (packet *NTPPacket) PatchPacketEncrypted(message uint16, key []byte) error {
+	plaintext := make([]byte, 2)
+	binary.BigEndian.PutUint16(plaintext, message)
+
+	ciphertext, err := Encrypt(plaintext, packet.GetNonce(), key)
+	if err != nil {
+		return fmt.Errorf("Couldn't encrypt message %v: %v", plaintext, err.Error())
+	}
+
+	packet.TxTimeFrac &^= 0xFFFF  // Clear bottom two bytes
+	packet.TxTimeFrac |= uint32(binary.BigEndian.Uint16(ciphertext))
+
+	return nil
+}
+
+// Get the nonce from a packet's Transmitted Timestamp.
+// The nonce does not include information from the bottom
+// two bytes of the TxTimeFrac since that is overwritten
+// with our encrypted data.
+// 
+// The nonce is 16 bytes: 
+//  00 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15
+//  \____________/ \___/ \________________________/
+//       |           |                  |
+//   TxTimeSec  TxTimeFrac[0:2]       Zeroes
+func (packet *NTPPacket) GetNonce() (nonce []byte) {
+	nonce = make([]byte, 16)
+	binary.BigEndian.PutUint32(nonce, packet.TxTimeSec)
+	binary.BigEndian.PutUint32(nonce[4:], packet.TxTimeFrac &^ 0xFFFF)
+	binary.BigEndian.PutUint64(nonce[8:], 0)
+
+	return nonce
 }

@@ -13,6 +13,8 @@ import (
 	"os"
 )
 
+var key = []byte{0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa}
+
 // Goal: Send an NTP packet to myself with the TX timestamp
 // looking normal, but the final two bytes being 0a 0b
 func Main() {
@@ -52,17 +54,15 @@ func Main() {
 func sendMessage(message uint16, host *string) error {
 	conn, err := net.Dial("udp", *host)
 	if err != nil {
-		msg := fmt.Sprintf("Failed to connect to %v: %v", *host, err)
-		return errors.New(msg)
+		return fmt.Errorf("failed to connect to %v: %v", *host, err)
 	}
 	defer conn.Close()
 
 	packet := common.GenerateClientPkt()
-	packet.PatchPacket(message)
+	packet.PatchPacketEncrypted(message, key)
 
 	if err := binary.Write(conn, binary.BigEndian, packet); err != nil {
-		msg := fmt.Sprintf("Failed sending packet %v to %v: %v", packet, *host, err)
-		return errors.New(msg)
+		return fmt.Errorf("failed sending packet %v to %v: %v", packet, *host, err)
 	}
 
 	return nil
