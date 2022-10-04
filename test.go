@@ -1,22 +1,20 @@
 package main
 
 import (
-	"encoding/binary"
+	"context"
 	"fmt"
+	"net"
 
 	"github.com/evallen/ntpescape/common"
 )
 
 func main() {
-	packet := common.GenerateClientPkt()
-	fmt.Printf("%v", packet.GetNonce())
+	for _, name := range common.NtpServerNames {
+		ips, err := net.DefaultResolver.LookupIP(context.Background(), "ip4", name)
+		if err != nil {
+			continue
+		}
 
-	b := make([]byte, 4)
-
-	binary.BigEndian.PutUint32(b, packet.TxTimeSec)
-	fmt.Printf("%v", b)
-
-	binary.BigEndian.PutUint32(b, packet.TxTimeFrac)
-
-	fmt.Printf("%v", b)
+		fmt.Printf("\"%v\",\n", ips[0])
+	}
 }
