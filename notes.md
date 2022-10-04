@@ -6,6 +6,8 @@ Todo
 
 * Have a way to vary the keys. 
 
+* Fix issue if there's an odd-length payload to send
+
 * Add different options:
     * Different payload lengths / locations per message
     * Different message frequencies

@@ -27,11 +27,14 @@ const rootInfoUpdateDelayHigh = 20
 var rootInfo = common.RootInfo{}
 var rootInfoMutex sync.Mutex
 
+// Randomly generate new root info.
+//
+// Locks / unlocks rootInfoMutex.
 func updateRootInfo() {
 	rootInfoMutex.Lock()
 
 	rootInfo.RefTimeSec, rootInfo.RefTimeFrac = common.GetNTPTime(time.Now())
-	
+
 	rootServerIpStr := common.NtpServerIps[rand.Intn(len(common.NtpServerIps))]
 	rootInfo.ReferenceID = binary.BigEndian.Uint32(net.ParseIP(rootServerIpStr).To4())
 
@@ -44,6 +47,10 @@ func updateRootInfo() {
 	rootInfoMutex.Unlock()
 }
 
+// Goroutine to occasionally change the stored root info.
+//
+// The root info is the information that the receiver _would_ update
+// if it were a real NTP server. This makes the responses more believeable.
 func rootInfoDaemon() {
 	for {
 		updateRootInfo()
@@ -71,6 +78,7 @@ func Main() {
 	listenToPackets(conn)
 }
 
+// Continuously listen and process incoming packets.
 func listenToPackets(conn *net.UDPConn) {
 	var packet common.NTPPacket
 	for {
@@ -95,6 +103,10 @@ func listenToPackets(conn *net.UDPConn) {
 	}
 }
 
+// Decrypt and repsond to a given `packet`.
+//
+// Pass in the address `addr` it came from and the connection `conn` to use
+// when responding.
 func processPacket(packet *common.NTPPacket, addr *net.UDPAddr, conn *net.UDPConn) error {
 	b := make([]byte, 4)
 	binary.BigEndian.PutUint32(b, packet.TxTimeFrac)
@@ -115,6 +127,10 @@ func processPacket(packet *common.NTPPacket, addr *net.UDPAddr, conn *net.UDPCon
 	return nil
 }
 
+// Send a response packet after receiving a client packet.
+//
+// Pass in the client `packet` to respond to, the address `raddrUdp` to send
+// the response back to, and the connection `conn` to use.
 func sendResponsePkt(packet *common.NTPPacket, raddrUdp *net.UDPAddr, conn *net.UDPConn) error {
 	rootInfoMutex.Lock()
 	responsePkt := packet.GenerateResponsePkt(&rootInfo)

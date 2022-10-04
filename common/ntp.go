@@ -50,6 +50,8 @@ type RootInfo struct {
 	RefTimeFrac    uint32
 }
 
+// Generate a basic, legitimate NTP client packet with the current
+// NTP time filled in the transmit timestamp.
 func GenerateClientPkt() *NTPPacket {
 	// Flags:
 	// 00 --------- Leap year (0: no warning)
@@ -69,11 +71,11 @@ func GenerateClientPkt() *NTPPacket {
 
 // Gets the NTP time in the form (NTP seconds, NTP fraction)
 // from a Go time.Time.
-func GetNTPTime(now time.Time) (uint32, uint32) {
+func GetNTPTime(now time.Time) (ntpSecs uint32, ntpFrac uint32) {
 	unixSecs := uint32(now.Unix())
 	nanoseconds := uint64(now.Nanosecond())
 
-	ntpSecs := unixSecs + secsSinceNTPEpoch
+	ntpSecs = unixSecs + secsSinceNTPEpoch
 
 	// The NTP fraction is a uint32 representing the
 	// current fraction of a second where each increment
@@ -81,11 +83,17 @@ func GetNTPTime(now time.Time) (uint32, uint32) {
 	//
 	// 		ntpFrac * (1/2^32) = nanoseconds / 1e9
 	// => 	ntpFrac = nanoseconds * 2^32 / 1e9
-	ntpFrac := uint32((nanoseconds << 32) / 1e9)
+	ntpFrac = uint32((nanoseconds << 32) / 1e9)
 
 	return ntpSecs, ntpFrac
 }
 
+// Convert a float64 `time` representing seconds to 
+// a uint32 in NTP short format. 
+//
+// NTP short format is defined in the NTP RFC as 
+// two 16-bit numbers concatenated together - 
+// a seconds segment, and a fractional segment. 
 func ToNTPShortFormat(time float64) (result uint32) {
 	timeSecs, timeFrac := math.Modf(time)
 
@@ -93,11 +101,11 @@ func ToNTPShortFormat(time float64) (result uint32) {
 	shortSecs = uint16(timeSecs)
 
 	// Convert floating fraction (0.0 <= timeFrac < 1.0)
-	// to NTP short fraction, where each value is 1/2^16. 
+	// to NTP short fraction, where each value is 1/2^16.
 	//
 	// 		shortFrac * (1/2^16) = timeFrac
 	// =>	shortFrac = timeFrac * 2^16
-	shortFrac = uint16(timeFrac * (1 << 16)) 
+	shortFrac = uint16(timeFrac * (1 << 16))
 
 	result = 0
 	result |= uint32(shortSecs) << 16
@@ -106,8 +114,10 @@ func ToNTPShortFormat(time float64) (result uint32) {
 	return result
 }
 
+// Generate a response packet from scratch given a set of root info to 
+// populate it with. Fills in the transmit timestamp of the receiver `packet`
+// in the response packet's origin timestamp.
 func (packet *NTPPacket) GenerateResponsePkt(rootInfo *RootInfo) *NTPPacket {
-
 	newPacket := &NTPPacket{}
 
 	// Do first upon "receive"
@@ -139,18 +149,26 @@ func (packet *NTPPacket) GenerateResponsePkt(rootInfo *RootInfo) *NTPPacket {
 	return newPacket
 }
 
+// Patch an existing packet so that it includes a given 2-byte (16-bit)
+// message in the last two bytes of the transmit timestamp fraction,
+// unencrypted.
 func (packet *NTPPacket) PatchPacketUnencrypted(message uint16) {
 	packet.TxTimeFrac &^= 0xFFFF // Clear bottom two bytes
 	packet.TxTimeFrac |= uint32(message)
 }
 
+// Patch an existing packet so that it includes a given 2-byte (16-bit)
+// message in the last two bytes of the transmit timestamp fraction,
+// encrypted.
+//
+// See (*NTPPacket).GetNonce() for the details on the nonce used.
 func (packet *NTPPacket) PatchPacketEncrypted(message uint16, key []byte) error {
 	plaintext := make([]byte, 2)
 	binary.BigEndian.PutUint16(plaintext, message)
 
 	ciphertext, err := Encrypt(plaintext, packet.GetNonce(), key)
 	if err != nil {
-		return fmt.Errorf("Couldn't encrypt message %v: %v", plaintext, err.Error())
+		return fmt.Errorf("couldn't encrypt message %v: %v", plaintext, err.Error())
 	}
 
 	packet.TxTimeFrac &^= 0xFFFF // Clear bottom two bytes
@@ -160,6 +178,7 @@ func (packet *NTPPacket) PatchPacketEncrypted(message uint16, key []byte) error 
 }
 
 // Get the nonce from a packet's Transmitted Timestamp.
+//
 // The nonce does not include information from the bottom
 // two bytes of the TxTimeFrac since that is overwritten
 // with our encrypted data.
@@ -167,18 +186,30 @@ func (packet *NTPPacket) PatchPacketEncrypted(message uint16, key []byte) error 
 // The nonce is 16 bytes:
 //
 //	00 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15
-//	\____________/ \___/ \________________________/
-//	     |           |                  |
-//	 TxTimeSec  TxTimeFrac[0:2]       Zeroes
+//	\_________/ \___/ \___________________________/
+//	     |        |                        |
+//	 TxTimeSec  TxTimeFrac[0:2] &^ 1       Zeroes
+//
+//
+// The first four bytes are the transmit timestamp 
+// seconds bytes; the next two bytes are the most significant
+// two bytes of the transmit timestamp fraction WITH the bottom
+// bit zeroed out. This is because we use that bottom bit
+// as a flag about whether the message contains 1 or 2 bytes.
+//
+// The next bytes are just zeroes. This is still a valid nonce
+// because the nonce will not be repeated for 2^32 seconds = 
+// 136 years as long as packets are not sent too quickly.
 func (packet *NTPPacket) GetNonce() (nonce []byte) {
 	nonce = make([]byte, 16)
 	binary.BigEndian.PutUint32(nonce, packet.TxTimeSec)
-	binary.BigEndian.PutUint32(nonce[4:], packet.TxTimeFrac&^0xFFFF)
+	binary.BigEndian.PutUint32(nonce[4:], packet.TxTimeFrac&^0x1FFFF)
 	binary.BigEndian.PutUint64(nonce[8:], 0)
 
 	return nonce
 }
 
+// List of all the Stratum 1 NTP IPs that the receiver might "contact" for an update.
 var NtpServerIps = []string{
 	"216.239.35.12",
 	"216.239.35.0",

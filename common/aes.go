@@ -6,6 +6,8 @@ import (
 	"errors"
 )
 
+// Encrypt a plaintext using AES CTR-mode encryption. 
+// The `key` and `nonce` must each be 16 bytes.
 func Encrypt(plaintext []byte, nonce []byte, key []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -20,6 +22,8 @@ func Encrypt(plaintext []byte, nonce []byte, key []byte) ([]byte, error) {
 	return ciphertext, nil
 }
 
+// Decrypt a ciphertext using AES CTR-mode encryption. 
+// The `key` and `nonce` must each be 16 bytes.
 func Decrypt(ciphertext []byte, nonce []byte, key []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
