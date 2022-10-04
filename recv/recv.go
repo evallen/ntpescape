@@ -61,9 +61,9 @@ func rootInfoDaemon() {
 }
 
 func Main() {
-	listenhost := flag.String("h", ":123", "host: What host and port to listen to, like :123")
+	listendest := flag.String("h", ":123", "dest: What dest and port to listen to, like :123")
 
-	udpaddr, err := net.ResolveUDPAddr("udp", *listenhost)
+	udpaddr, err := net.ResolveUDPAddr("udp", *listendest)
 	if err != nil {
 		log.Fatalf("Error resolving UDP address %v: %v", udpaddr, err.Error())
 	}
@@ -108,13 +108,9 @@ func listenToPackets(conn *net.UDPConn) {
 // Pass in the address `addr` it came from and the connection `conn` to use
 // when responding.
 func processPacket(packet *common.NTPPacket, addr *net.UDPAddr, conn *net.UDPConn) error {
-	b := make([]byte, 4)
-	binary.BigEndian.PutUint32(b, packet.TxTimeFrac)
-
-	ciphertext := b[2:4]
-	plaintext, err := common.Decrypt(ciphertext, packet.GetNonce(), key)
+	plaintext, err := packet.ReadPacketEncrypted(key)
 	if err != nil {
-		return fmt.Errorf("could not decrypt ciphertext %v: %v", ciphertext, err)
+		return fmt.Errorf("could not read encrypted packet: %v", err)
 	}
 
 	fmt.Printf("%v", string(plaintext))

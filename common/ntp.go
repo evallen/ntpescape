@@ -88,12 +88,12 @@ func GetNTPTime(now time.Time) (ntpSecs uint32, ntpFrac uint32) {
 	return ntpSecs, ntpFrac
 }
 
-// Convert a float64 `time` representing seconds to 
-// a uint32 in NTP short format. 
+// Convert a float64 `time` representing seconds to
+// a uint32 in NTP short format.
 //
-// NTP short format is defined in the NTP RFC as 
-// two 16-bit numbers concatenated together - 
-// a seconds segment, and a fractional segment. 
+// NTP short format is defined in the NTP RFC as
+// two 16-bit numbers concatenated together -
+// a seconds segment, and a fractional segment.
 func ToNTPShortFormat(time float64) (result uint32) {
 	timeSecs, timeFrac := math.Modf(time)
 
@@ -114,7 +114,7 @@ func ToNTPShortFormat(time float64) (result uint32) {
 	return result
 }
 
-// Generate a response packet from scratch given a set of root info to 
+// Generate a response packet from scratch given a set of root info to
 // populate it with. Fills in the transmit timestamp of the receiver `packet`
 // in the response packet's origin timestamp.
 func (packet *NTPPacket) GenerateResponsePkt(rootInfo *RootInfo) *NTPPacket {
@@ -152,19 +152,37 @@ func (packet *NTPPacket) GenerateResponsePkt(rootInfo *RootInfo) *NTPPacket {
 // Patch an existing packet so that it includes a given 2-byte (16-bit)
 // message in the last two bytes of the transmit timestamp fraction,
 // unencrypted.
-func (packet *NTPPacket) PatchPacketUnencrypted(message uint16) {
+func (packet *NTPPacket) PatchPacketUnencrypted(message []byte) error {
+	if len(message) > 2 || len(message) < 1 {
+		return fmt.Errorf("invalid message length %v", len(message))
+	}
+
+	// Initialize to zeroes so that if the message is only one byte, the final byte
+	// is just 0x00.
+	plaintext := []byte{0, 0}
+	copy(plaintext, message)
+
 	packet.TxTimeFrac &^= 0xFFFF // Clear bottom two bytes
-	packet.TxTimeFrac |= uint32(message)
+	packet.TxTimeFrac |= uint32(binary.BigEndian.Uint16(plaintext))
+	packet.setLengthBitUnencrypted(len(message))
+
+	return nil
 }
 
-// Patch an existing packet so that it includes a given 2-byte (16-bit)
+// Patch an existing packet so that it includes a given 1 or 2-byte
 // message in the last two bytes of the transmit timestamp fraction,
 // encrypted.
 //
 // See (*NTPPacket).GetNonce() for the details on the nonce used.
-func (packet *NTPPacket) PatchPacketEncrypted(message uint16, key []byte) error {
-	plaintext := make([]byte, 2)
-	binary.BigEndian.PutUint16(plaintext, message)
+func (packet *NTPPacket) PatchPacketEncrypted(message []byte, key []byte) error {
+	if len(message) > 2 || len(message) < 1 {
+		return fmt.Errorf("invalid message length %v", len(message))
+	}
+
+	// Initialize to zeroes so that if the message is only one byte, the final byte
+	// is just 0x00.
+	plaintext := []byte{0, 0}
+	copy(plaintext, message)
 
 	ciphertext, err := Encrypt(plaintext, packet.GetNonce(), key)
 	if err != nil {
@@ -174,7 +192,147 @@ func (packet *NTPPacket) PatchPacketEncrypted(message uint16, key []byte) error 
 	packet.TxTimeFrac &^= 0xFFFF // Clear bottom two bytes
 	packet.TxTimeFrac |= uint32(binary.BigEndian.Uint16(ciphertext))
 
+	packet.setLengthBitEncrypted(len(message), key)
+
 	return nil
+}
+
+// Sets the length bit in encrypted mode.
+//
+// The length bit signals whether or not the message
+// should be interpreted as one or two bytes.
+//
+// In encrypted mode, the bit is set to the last bit
+// of Encrypt(0x00, packet.GetNonce(), key) if the
+// message is two bytes or the opposite if the message
+// is one byte. We do this so that the length bit
+// appears statistically random and cannot be detected
+// by an IDS as being abnormally biased towards 1 or 0.
+// It is only interpretable by someone with the key.
+func (packet *NTPPacket) setLengthBitEncrypted(length int, key []byte) error {
+	zeroEncrypted, _ := Encrypt([]byte{0x00}, packet.GetNonce(), key)
+
+	lastBit := zeroEncrypted[0] & 1
+	lastBitBool := lastBit == 1 // Convert 1 -> true, 0 -> false
+
+	if length == 2 {
+		packet.setLengthBitRaw(lastBitBool)
+	} else if length == 1 {
+		packet.setLengthBitRaw(!lastBitBool)
+	} else {
+		return fmt.Errorf("invalid length %v", length)
+	}
+	
+	return nil
+}
+
+// Sets the length bit in unencrypted mode.
+//
+// The length bit signals whether or not the message
+// should be interpreted as one or two bytes.
+//
+// In unencrypted mode, the length bit being '1' signals
+// a message of two bytes and a length bit being '0' signals
+// a message of one byte.
+func (packet *NTPPacket) setLengthBitUnencrypted(length int) error {
+	if length == 2 {
+		packet.setLengthBitRaw(true)
+	} else if length == 1 {
+		packet.setLengthBitRaw(false)
+	} else {
+		return fmt.Errorf("invalid length %v", length)
+	}
+
+	return nil
+}
+
+// Actually modify the length bit of the packet.
+// `bit` == true represents 1,
+// `bit` == false represents 0.
+func (packet *NTPPacket) setLengthBitRaw(bit bool) {
+	if bit {
+		packet.TxTimeFrac |= 0x00010000
+	} else {
+		packet.TxTimeFrac &^= 0x00010000
+	}
+}
+
+// Interpret the length bit of an encrypted packet.
+//
+// Returns the length of the message in bytes:
+// 2 if the length bit matches the bottom bit of 
+// Encrypt([]byte{0x00}, packet.GetNonce(), key), or 1
+// if not.
+func (packet *NTPPacket) readLengthBitEncrypted(key []byte) int {
+	zeroEncrypted, _ := Encrypt([]byte{0x00}, packet.GetNonce(), key)
+
+	lastBit := zeroEncrypted[0] & 1
+	lastBitBool := lastBit == 1 // Convert 1 -> true, 0 -> false
+
+	lengthBit := packet.readLengthBitRaw()
+	
+	if lengthBit == lastBitBool {
+		return 2
+	} else {
+		return 1
+	}
+}
+
+// Interpret the length bit of an unencrypted packet.
+//
+// Returns the length of the message in bytes:
+// 2 if the length bit is set, and 1 if not.
+func (packet *NTPPacket) readLengthBitUnencrypted() int {
+	bit := packet.readLengthBitRaw()
+	if bit {
+		return 2
+	} else {
+		return 1
+	}
+}
+
+// Get the literal value of the length bit of the 
+// packet.
+// true represents 1, false represents 0.
+func (packet *NTPPacket) readLengthBitRaw() bool {
+	return (packet.TxTimeFrac & 0x00010000) > 0
+}
+
+// Read an unencrypted client packet and get the message
+// out as a []byte slice.
+func (packet *NTPPacket) ReadPacketUnencrypted() []byte {
+	message := make([]byte, 4)
+	binary.BigEndian.PutUint32(message, packet.TxTimeFrac)
+
+	// We only care about the bottom two bytes for the actual message
+	message = message[2:4]
+
+	if packet.readLengthBitUnencrypted() == 2 {
+		return message
+	} else {
+		return message[:1]
+	}
+}
+
+// Read an encrypted client packet and get the message
+// out as a []byte slice.
+func (packet *NTPPacket) ReadPacketEncrypted(key []byte) ([]byte, error) {
+	message := make([]byte, 4)
+	binary.BigEndian.PutUint32(message, packet.TxTimeFrac)
+
+	// We only care about the bottom two bytes for the actual message
+	ciphertext := message[2:4]
+
+	plaintext, err := Decrypt(ciphertext, packet.GetNonce(), key)
+	if err != nil {
+		return nil, fmt.Errorf("could not decrypt ciphertext %v: %v", ciphertext, err)
+	}
+
+	if packet.readLengthBitEncrypted(key) == 2 {
+		return plaintext, nil
+	} else {
+		return plaintext[:1], nil
+	}
 }
 
 // Get the nonce from a packet's Transmitted Timestamp.
@@ -190,15 +348,14 @@ func (packet *NTPPacket) PatchPacketEncrypted(message uint16, key []byte) error 
 //	     |        |                        |
 //	 TxTimeSec  TxTimeFrac[0:2] &^ 1       Zeroes
 //
-//
-// The first four bytes are the transmit timestamp 
+// The first four bytes are the transmit timestamp
 // seconds bytes; the next two bytes are the most significant
 // two bytes of the transmit timestamp fraction WITH the bottom
 // bit zeroed out. This is because we use that bottom bit
 // as a flag about whether the message contains 1 or 2 bytes.
 //
 // The next bytes are just zeroes. This is still a valid nonce
-// because the nonce will not be repeated for 2^32 seconds = 
+// because the nonce will not be repeated for 2^32 seconds =
 // 136 years as long as packets are not sent too quickly.
 func (packet *NTPPacket) GetNonce() (nonce []byte) {
 	nonce = make([]byte, 16)
