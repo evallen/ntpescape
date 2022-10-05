@@ -18,6 +18,7 @@ import (
 var key = []byte{0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa}
 
 const timeout = 5 * time.Second
+const maxTries = 5
 
 func Main() {
 	dest := flag.String("d", "localhost:123", "dest: host to send the NTP packets to")
@@ -91,32 +92,39 @@ func sendFromReader(dest *string, rd io.Reader) error {
 // Splits the `buf` into two-byte message segments
 // and reliably sends each one. 
 func reliableSendBuffer(buf []byte, dest *string) error {
-	for i := 0; i < len(buf); i += 2 {
-		message := make([]byte, 2)
+	triesLeft := maxTries
+
+	for i := 0; i < len(buf); {
+		if triesLeft <= 0 {
+			return fmt.Errorf("could not reliably send buffer")
+		}
+
+		var message []byte
 		if i == len(buf)-1 {
 			message = buf[i:i+1]
 		} else {
 			message = buf[i:i+2]
 		}
 
-		err := reliableSendMessage(message, dest)
+		err := sendMessage(message, dest)
 		if err != nil {
-			return fmt.Errorf("error reliably sending message: %v", err)
+			log.Printf("Retrying message send: %v", err)
+			triesLeft--
+		} else {
+			i += 2
+			triesLeft = maxTries
 		}
 	}
 
 	return nil
 }
 
-// Reliably send a 1 or 2-byte `message` to a `dest`. 
+// Send a 1 or 2-byte `message` to a `dest`. 
 //
 // This function sends a packet with the `message` 
 // and waits for a corresponding ACK response from the 
 // server.
-// 
-// If it doesn't get one, it tries over and over again
-// until the server eventually responds correctly.
-func reliableSendMessage(message []byte, dest *string) error {
+func sendMessage(message []byte, dest *string) error {
 	if len(message) > 2 || len(message) < 1 {
 		return fmt.Errorf("invalid message length %v", len(message))
 	}
@@ -132,18 +140,18 @@ func reliableSendMessage(message []byte, dest *string) error {
 	}
 	defer conn.Close()
 
-	result := false
+	sentPacket, err := _sendMessage(message, conn)
+	if err != nil {
+		return fmt.Errorf("error sending message: %v", err)
+	}
 
-	for !result {
-		sentPacket, err := sendMessage(message, conn)
-		if err != nil {
-			log.Printf("error sending message: %v\n", err)
-		}
-
-		result, err = waitForAck(sentPacket, conn)
-		if err != nil {
-			log.Printf("error waiting for ACK: %v", err)
-		}
+	result, err := waitForAck(sentPacket, conn)
+	if err != nil {
+		return fmt.Errorf("error waiting for ACK: %v", err)
+	}
+	
+	if !result {
+		return fmt.Errorf("invalid ACK received")
 	}
 
 	return nil
@@ -160,7 +168,7 @@ func reliableSendMessage(message []byte, dest *string) error {
 //
 // Returns the sent NTP packet (for use in verifying ACK packets later) and any
 // error.
-func sendMessage(message []byte, conn *net.UDPConn) (*common.NTPPacket, error) {
+func _sendMessage(message []byte, conn *net.UDPConn) (*common.NTPPacket, error) {
 
 	if len(message) > 2 || len(message) < 1 {
 		return &common.NTPPacket{}, fmt.Errorf("invalid message length %v", len(message))

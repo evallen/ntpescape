@@ -5,9 +5,11 @@ import (
 	"encoding/binary"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
 	"net"
+	"os"
 	"sync"
 	"time"
 
@@ -26,6 +28,8 @@ const rootInfoUpdateDelayHigh = 20
 
 var rootInfo = common.RootInfo{}
 var rootInfoMutex sync.Mutex
+
+var outwriter io.Writer = nil
 
 // Randomly generate new root info.
 //
@@ -61,11 +65,27 @@ func rootInfoDaemon() {
 }
 
 func Main() {
-	listendest := flag.String("h", ":123", "dest: What dest and port to listen to, like :123")
+	listendest := flag.String("d", ":123", "dest: What host and port to listen to, like :123")
+	outfile := flag.String("f", "", "file: File to also output results to")
+	help := flag.Bool("h", false, "help: Show this help")
+	flag.Parse()
+
+	if *help {
+		flag.Usage()
+		return
+	}
+
+	if *outfile != "" {
+		writer, err := os.Create(*outfile)
+		if err != nil {
+			log.Fatalf("Error opening out file %v: %v", *outfile, err)
+		}
+		outwriter = writer
+	}
 
 	udpaddr, err := net.ResolveUDPAddr("udp", *listendest)
 	if err != nil {
-		log.Fatalf("Error resolving UDP address %v: %v", udpaddr, err.Error())
+		log.Fatalf("Error resolving UDP address: %v", err.Error())
 	}
 
 	conn, err := net.ListenUDP("udp", udpaddr)
@@ -113,7 +133,7 @@ func processPacket(packet *common.NTPPacket, addr *net.UDPAddr, conn *net.UDPCon
 		return fmt.Errorf("could not read encrypted packet: %v", err)
 	}
 
-	fmt.Printf("%v", string(plaintext))
+	recordMessage(plaintext)
 
 	err = sendResponsePkt(packet, addr, conn)
 	if err != nil {
@@ -121,6 +141,15 @@ func processPacket(packet *common.NTPPacket, addr *net.UDPAddr, conn *net.UDPCon
 	}
 
 	return nil
+}
+
+// Record a `message` received.
+func recordMessage(message []byte) {
+	if outwriter != nil {
+		outwriter.Write(message)
+	}
+
+	fmt.Print(string(message))
 }
 
 // Send a response packet after receiving a client packet.

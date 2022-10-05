@@ -8,6 +8,8 @@ Todo
     * Different message frequencies
     * Different encryption options
 
+* Behavior when connection is refused
+
 Done
 ====
 
