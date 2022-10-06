@@ -10,7 +10,7 @@ import (
 
 // DUMMY VALUE! Set at build time with
 // -ldflags="-X 'github.com/evallen/ntpescape/common.KeyString=<put_your_key_here>'"
-const KeyString = "00112233445566778899AABBCCDDEEFF"
+var KeyString = "00112233445566778899AABBCCDDEEFF"
 const KeyLen = 16
 
 // Encrypt a plaintext using AES CTR-mode encryption. 
