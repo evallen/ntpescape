@@ -15,8 +15,6 @@ import (
 	"github.com/evallen/ntpescape/common"
 )
 
-var key = []byte{0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa}
-
 const timeout = 5 * time.Second
 const maxTries = 5
 
@@ -31,37 +29,42 @@ func Main() {
 		return
 	}
 
+	key, err := common.GetKey()
+	if err != nil {
+		log.Fatalf("Error decoding key: %v", err)
+	}
+
 	if *infile == "-" {
-		err := sendFromStdin(dest)
+		err := sendFromStdin(dest, key[:])
 		if err != nil {
 			log.Fatalln(err)
 		}
 		return
 	}
 
-	err := sendFromFile(dest, infile)
+	err = sendFromFile(dest, infile, key[:])
 	if err != nil {
 		log.Fatalln(err)
 	}
 }
 
 // Send data from stdin to the given `dest`. 
-func sendFromStdin(dest *string) error {
-	return sendFromReader(dest, os.Stdin)
+func sendFromStdin(dest *string, key []byte) error {
+	return sendFromReader(dest, os.Stdin, key)
 }
 
 // Send data from a `filepath` to the given `dest`.
-func sendFromFile(dest *string, filepath *string) error {
+func sendFromFile(dest *string, filepath *string, key []byte) error {
 	file, err := os.Open(*filepath)
 	if err != nil {
 		return fmt.Errorf("could not open file: %s", *filepath)
 	}
 
-	return sendFromReader(dest, file)
+	return sendFromReader(dest, file, key)
 }
 
 // Send data from a given reader interface to the given `dest`. 
-func sendFromReader(dest *string, rd io.Reader) error {
+func sendFromReader(dest *string, rd io.Reader, key []byte) error {
 	inbuf := make([]byte, 1024)
 	reader := bufio.NewReader(rd)
 
@@ -76,7 +79,7 @@ func sendFromReader(dest *string, rd io.Reader) error {
 
 		inbuf = inbuf[:n]
 
-		err = reliableSendBuffer(inbuf, dest)
+		err = reliableSendBuffer(inbuf, dest, key)
 		if err != nil {
 			return fmt.Errorf("error reliably sending buffer: %v", err)
 		}
@@ -91,7 +94,7 @@ func sendFromReader(dest *string, rd io.Reader) error {
 // 
 // Splits the `buf` into two-byte message segments
 // and reliably sends each one. 
-func reliableSendBuffer(buf []byte, dest *string) error {
+func reliableSendBuffer(buf []byte, dest *string, key []byte) error {
 	triesLeft := maxTries
 
 	for i := 0; i < len(buf); {
@@ -106,7 +109,7 @@ func reliableSendBuffer(buf []byte, dest *string) error {
 			message = buf[i:i+2]
 		}
 
-		err := sendMessage(message, dest)
+		err := sendMessage(message, dest, key)
 		if err != nil {
 			log.Printf("Retrying message send: %v", err)
 			triesLeft--
@@ -124,7 +127,7 @@ func reliableSendBuffer(buf []byte, dest *string) error {
 // This function sends a packet with the `message` 
 // and waits for a corresponding ACK response from the 
 // server.
-func sendMessage(message []byte, dest *string) error {
+func sendMessage(message []byte, dest *string, key []byte) error {
 	if len(message) > 2 || len(message) < 1 {
 		return fmt.Errorf("invalid message length %v", len(message))
 	}
@@ -140,7 +143,7 @@ func sendMessage(message []byte, dest *string) error {
 	}
 	defer conn.Close()
 
-	sentPacket, err := _sendMessage(message, conn)
+	sentPacket, err := _sendMessage(message, conn, key)
 	if err != nil {
 		return fmt.Errorf("error sending message: %v", err)
 	}
@@ -168,7 +171,7 @@ func sendMessage(message []byte, dest *string) error {
 //
 // Returns the sent NTP packet (for use in verifying ACK packets later) and any
 // error.
-func _sendMessage(message []byte, conn *net.UDPConn) (*common.NTPPacket, error) {
+func _sendMessage(message []byte, conn *net.UDPConn, key []byte) (*common.NTPPacket, error) {
 
 	if len(message) > 2 || len(message) < 1 {
 		return &common.NTPPacket{}, fmt.Errorf("invalid message length %v", len(message))

@@ -16,8 +16,6 @@ import (
 	"github.com/evallen/ntpescape/common"
 )
 
-var key = []byte{0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa}
-
 // Seconds
 const rootDelayLow = 0.001
 const rootDelayHigh = 0.002
@@ -75,6 +73,11 @@ func Main() {
 		return
 	}
 
+	key, err := common.GetKey()
+	if err != nil {
+		log.Fatalf("Error decoding key: %v", err)
+	}
+
 	if *outfile != "" {
 		writer, err := os.Create(*outfile)
 		if err != nil {
@@ -95,11 +98,11 @@ func Main() {
 	defer conn.Close()
 
 	go rootInfoDaemon()
-	listenToPackets(conn)
+	listenToPackets(conn, key[:])
 }
 
 // Continuously listen and process incoming packets.
-func listenToPackets(conn *net.UDPConn) {
+func listenToPackets(conn *net.UDPConn, key []byte) {
 	var packet common.NTPPacket
 	for {
 		buf := make([]byte, 512)
@@ -116,7 +119,7 @@ func listenToPackets(conn *net.UDPConn) {
 			continue
 		}
 
-		err = processPacket(&packet, addr, conn)
+		err = processPacket(&packet, addr, conn, key)
 		if err != nil {
 			log.Printf("Error processing packet: %v\n", err)
 		}
@@ -127,7 +130,7 @@ func listenToPackets(conn *net.UDPConn) {
 //
 // Pass in the address `addr` it came from and the connection `conn` to use
 // when responding.
-func processPacket(packet *common.NTPPacket, addr *net.UDPAddr, conn *net.UDPConn) error {
+func processPacket(packet *common.NTPPacket, addr *net.UDPAddr, conn *net.UDPConn, key []byte) error {
 	plaintext, err := packet.ReadPacketEncrypted(key)
 	if err != nil {
 		return fmt.Errorf("could not read encrypted packet: %v", err)
