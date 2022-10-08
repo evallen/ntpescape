@@ -44,11 +44,11 @@ very difficult to detect:
 Screenshots
 -----------
 
-![Client packet screenshot](img/client_screenshot.png)
+![Client packet screenshot](doc/img/client_screenshot.png)
 _This client (actually sent at 18:15:10UTC) packet transmits 
 the bytes 'hi'. Where's the data?_
 
-![Response packet screenshot](img/response_screenshot.png)
+![Response packet screenshot](doc/img/response_screenshot.png)
 _This response packet contains simulated and randomized
 data to make it seem as legitimate as possible._
 
@@ -67,6 +67,7 @@ Table of Contents
     - [Sender message embedding](#sender-message-embedding)
     - [Receiver operation](#receiver-operation)
     - [Reliable data transfer](#reliable-data-transfer)
+  - [Limitations / Future Work](#limitations--future-work)
 
 Quickstart
 ----------
@@ -288,3 +289,14 @@ The sender will send the same message over and over until it
 gets a valid response from the server (with typical delays
 between each send, of course). After a certain number of
 tries, it will give up.
+
+Limitations / Future Work
+-------------------------
+
+* Data transfer can be very slow under stealthy 
+  settings.
+* Data transfer can be quicker but easy to detect
+  (why does this machine want the time so often?)
+* Future work could:
+  * Abuse some of the security extensions to the protocol
+    as legitimate additional space to hide data.
