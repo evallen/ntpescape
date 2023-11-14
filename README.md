@@ -5,7 +5,9 @@
 
 `ntpescape` is a tool that can stealthily 
 (but slowly) exfiltrate data
-from a computer using the Network Time Protocol (NTP). 
+from a computer using the Network Time Protocol (NTP).
+
+See [here](doc/threatmodel_securitypolicy.md) for how to protect your organization against this!
 
 It contains many features designed to make the exfiltration
 very difficult to detect:
